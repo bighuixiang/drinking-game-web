@@ -131,3 +131,23 @@ export async function netDiskManageToken(options?: RequestOptions) {
     ...(options || {}),
   });
 }
+
+/** 获取COS STS临时凭证 POST /api/storage/cos/sts */
+export async function storageCosSts(options?: RequestOptions) {
+  return request<any>('/api/netdisk/cos/sts', {
+    method: 'POST',
+    ...(options || {}),
+  });
+}
+
+/** 上传完成确认入库 POST /api/storage/cos/confirm */
+export async function storageCosConfirm(body: { key: string; etag: string; size: number; mime: string; hash?: string }, options?: RequestOptions) {
+  return request<any>('/api/netdisk/cos/confirm', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+    data: body,
+    ...(options || {}),
+  });
+}
