@@ -132,10 +132,41 @@ export async function netDiskManageToken(options?: RequestOptions) {
   });
 }
 
-/** 获取COS STS临时凭证 POST /api/storage/cos/sts */
+/** @deprecated 已废弃：获取COS STS临时凭证，请使用 storageCosPresignedUrl */
 export async function storageCosSts(options?: RequestOptions) {
   return request<any>('/api/netdisk/cos/sts', {
     method: 'POST',
+    ...(options || {}),
+  });
+}
+
+/** 获取COS预签名上传URL POST /api/cos/presigned-url */
+export async function storageCosPresignedUrl(body: {
+  key: string;
+  contentType: string;
+  expires?: number;
+}, options?: RequestOptions) {
+  return request<any>('/api/netdisk/cos/presigned-url', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+    data: body,
+    ...(options || {}),
+  });
+}
+
+/** 获取COS预签名下载URL POST /api/cos/download-url */
+export async function storageCosDownloadUrl(body: {
+  key: string;
+  expires?: number;
+}, options?: RequestOptions) {
+  return request<any>('/api/netdisk/cos/download-url', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+    data: body,
     ...(options || {}),
   });
 }

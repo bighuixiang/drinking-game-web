@@ -1,4 +1,3 @@
-import COS from 'cos-js-sdk-v5'
 import { Api } from '@/api/'
 
 export type UploadProgress = (percent: number) => void
@@ -10,95 +9,146 @@ export interface UploadResult {
   mime: string
 }
 
-interface StsResp {
-  credentials: { tmpSecretId: string; tmpSecretKey: string; sessionToken: string }
-  startTime: number
-  expiredTime: number
-  bucket: string
-  region: string
+interface PresignedUrlResp {
+  url: string
+  key: string
+  expires: number
   uploadDir: string
   maxSizeMb?: number
   allowedExts?: string[]
   keyStrategy?: string
 }
 
-let cachedSts: StsResp | null = null
+let cachedConfig: Omit<PresignedUrlResp, 'url' | 'expires'> | null = null
 
-function isStsExpired(sts: StsResp | null) {
-  if (!sts) return true
+function isConfigExpired(config: PresignedUrlResp | null) {
+  if (!config) return true
   const now = Math.floor(Date.now() / 1000)
-  return now > (sts.expiredTime - 120)
+  return now > (config.expires - 60) // 提前1分钟刷新
 }
 
-async function getSts(): Promise<StsResp> {
-  if (!cachedSts || isStsExpired(cachedSts)) {
-    cachedSts = await Api.netDiskManage.storageCosSts()
-  }
-  return cachedSts
-}
-
-function buildObjectKey(sts: StsResp, file: File): string {
-  return `${sts.uploadDir}${file.name}`
-}
-
-export function createCosInstance() {
-  const cos = new COS({
-    getAuthorization: async (_options: any, callback: any) => {
-      const sts = await getSts()
-      callback({
-        TmpSecretId: sts.credentials.tmpSecretId,
-        TmpSecretKey: sts.credentials.tmpSecretKey,
-        SecurityToken: sts.credentials.sessionToken,
-        StartTime: sts.startTime,
-        ExpiredTime: sts.expiredTime,
-      })
-    },
+async function getPresignedUrl(file: File): Promise<PresignedUrlResp> {
+  const key = buildObjectKey(file)
+  
+  const response = await Api.netDiskManage.storageCosPresignedUrl({
+    key,
+    contentType: file.type,
+    expires: 3600, // 1小时过期
   })
-  return cos
+  
+  // 缓存配置信息
+  if (!cachedConfig || cachedConfig.uploadDir !== response.uploadDir) {
+    cachedConfig = {
+      key: response.key,
+      uploadDir: response.uploadDir,
+      maxSizeMb: response.maxSizeMb,
+      allowedExts: response.allowedExts,
+      keyStrategy: response.keyStrategy,
+    }
+  }
+  
+  return response
+}
+
+function buildObjectKey(file: File): string {
+  if (!cachedConfig) {
+    // 如果没有缓存配置，使用默认路径
+    const timestamp = new Date().toISOString().slice(0, 10).replace(/-/g, '')
+    const randomId = Math.random().toString(36).substring(2, 15)
+    return `netdisk/${timestamp}/${randomId}_${file.name}`
+  }
+  return `${cachedConfig.uploadDir}${file.name}`
 }
 
 export async function uploadFileWithCos(file: File, onProgress?: UploadProgress, signal?: AbortSignal): Promise<UploadResult> {
-  const sts = await getSts()
-  if (sts.maxSizeMb && file.size > sts.maxSizeMb * 1024 * 1024) {
-    throw new Error(`文件超过大小限制：${sts.maxSizeMb}MB`)
+  // 获取预签名URL
+  const presignedUrl = await getPresignedUrl(file)
+  
+  // 验证文件大小和类型
+  if (presignedUrl.maxSizeMb && file.size > presignedUrl.maxSizeMb * 1024 * 1024) {
+    throw new Error(`文件超过大小限制：${presignedUrl.maxSizeMb}MB`)
   }
-  if (sts.allowedExts && sts.allowedExts.length > 0) {
+  if (presignedUrl.allowedExts && presignedUrl.allowedExts.length > 0) {
     const ext = (file.name.split('.').pop() || '').toLowerCase()
-    if (!sts.allowedExts.map(e => e.toLowerCase()).includes(ext)) {
+    if (!presignedUrl.allowedExts.map(e => e.toLowerCase()).includes(ext)) {
       throw new Error(`不支持的文件类型：.${ext}`)
     }
   }
 
-  const cos = createCosInstance()
-  const Key = buildObjectKey(sts, file)
-  const Bucket = sts.bucket
-  const Region = sts.region
+  const Key = presignedUrl.key
   const isLarge = file.size > 5 * 1024 * 1024
 
-  const params: any = {
-    Bucket,
-    Region,
-    Key,
-    Body: file,
-    onProgress: (progressData: any) => {
-      if (onProgress) onProgress(Math.round(progressData.percent * 100))
-    },
-  }
-
-  const doUpload = () => new Promise<any>((resolve, reject) => {
-    const cb = (err: any, data: any) => (err ? reject(err) : resolve(data))
-    if (isLarge) (cos as any).sliceUploadFile(params, cb)
-    else (cos as any).putObject(params, cb)
-  })
-
-  if (signal) {
-    signal.addEventListener('abort', () => {
-      try { (cos as any).cancelTask({ Key }) } catch {}
+  // 使用XMLHttpRequest支持进度回调
+  const uploadWithXHR = (): Promise<{ ETag: string }> => {
+    return new Promise((resolve, reject) => {
+      const xhr = new XMLHttpRequest()
+      
+      if (onProgress) {
+        xhr.upload.addEventListener('progress', (e) => {
+          if (e.lengthComputable) {
+            const percent = Math.round((e.loaded / e.total) * 100)
+            onProgress(percent)
+          }
+        })
+      }
+      
+      xhr.addEventListener('load', () => {
+        if (xhr.status >= 200 && xhr.status < 300) {
+          const etag = xhr.getResponseHeader('ETag') || ''
+          resolve({ ETag: etag.replace(/"/g, '') })
+        } else {
+          reject(new Error(`上传失败: ${xhr.status} ${xhr.statusText}`))
+        }
+      })
+      
+      xhr.addEventListener('error', () => {
+        reject(new Error('网络错误'))
+      })
+      
+      xhr.addEventListener('abort', () => {
+        reject(new Error('上传已取消'))
+      })
+      
+      xhr.open('PUT', presignedUrl.url)
+      xhr.setRequestHeader('Content-Type', file.type)
+      xhr.send(file)
+      
+      if (signal) {
+        signal.addEventListener('abort', () => {
+          xhr.abort()
+        })
+      }
     })
   }
 
-  const result = await doUpload()
-  return { key: Key, etag: result.ETag, size: file.size, mime: file.type }
+  // 使用fetch API直接上传到预签名URL（无进度回调）
+  const uploadWithFetch = async (): Promise<{ ETag: string }> => {
+    const response = await fetch(presignedUrl.url, {
+      method: 'PUT',
+      body: file,
+      headers: {
+        'Content-Type': file.type,
+      },
+      signal,
+    })
+    
+    if (!response.ok) {
+      throw new Error(`上传失败: ${response.status} ${response.statusText}`)
+    }
+    
+    // 从响应头获取ETag
+    const etag = response.headers.get('ETag') || response.headers.get('etag') || ''
+    return { ETag: etag.replace(/"/g, '') }
+  }
+
+  const result = await (onProgress ? uploadWithXHR() : uploadWithFetch())
+  
+  return { 
+    key: Key, 
+    etag: result.ETag, 
+    size: file.size, 
+    mime: file.type 
+  }
 }
 
 export async function confirmUpload(result: UploadResult) {
@@ -109,3 +159,13 @@ export async function confirmUpload(result: UploadResult) {
     mime: result.mime,
   })
 }
+
+// 新增：获取预签名下载URL
+export async function getDownloadUrl(key: string, expires: number = 3600): Promise<string> {
+  const response = await Api.netDiskManage.storageCosDownloadUrl({
+    key,
+    expires,
+  })
+  return response.url
+}
+
