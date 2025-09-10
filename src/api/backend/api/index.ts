@@ -1,5 +1,6 @@
 // @ts-ignore
 /* eslint-disable */
+
 // API 更新时间：
 // API 唯一标识：
 import * as auth from './auth';
@@ -25,6 +26,7 @@ import * as health from './health';
 import * as netDiskManage from './netDiskManage';
 import * as netDiskOverview from './netDiskOverview';
 import * as businessTodo from './businessTodo';
+import * as questionBankEmoji from './questionBankEmoji';
 export default {
   auth,
   account,
@@ -49,4 +51,5 @@ export default {
   netDiskManage,
   netDiskOverview,
   businessTodo,
+  questionBankEmoji,
 };
