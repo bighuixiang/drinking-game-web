@@ -58,7 +58,7 @@ const uploadFile: UploadProps['customRequest'] = async (param) => {
     const f = file as File
     // 将 key 前缀拼入文件名（util 内部会使用后端约定的 uploadDir）
     const fileWithPath = new File([f], `${path.value}${f.name}`, { type: f.type })
-    const result = await uploadFileWithCos(fileWithPath, (p) => onProgress?.({ percent: p }))
+    const result = await uploadFileWithCos(fileWithPath, p => onProgress?.({ percent: p }), undefined, isEmpty(path.value) ? '/' : path.value)
     await confirmUpload(result)
     successSubs.value.push(result)
     onSuccess?.(result as any)
@@ -91,6 +91,8 @@ const handleUploadSuccess = (file: File) => {
   notification.success({
     message: `上传${successFile?.name}成功`,
   })
+  // 上传成功后立即刷新当前目录列表
+  emit('changed')
 }
 const clear = async () => {
   if (subscribes.value.length <= 0) {
@@ -102,7 +104,7 @@ const clear = async () => {
   successSubs.value = []
   if (subsTmpArr.length !== successSubsTmpArr.length) {
     for (let i = 0; i < subsTmpArr.length; i++) {
-      if (subsTmpArr[i]?.unsubscribe) subsTmpArr[i].unsubscribe()
+      if (subsTmpArr[i]?.unsubscribe) { subsTmpArr[i].unsubscribe() }
       subsTmpArr[i] = null
     }
   }

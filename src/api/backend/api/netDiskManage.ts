@@ -144,6 +144,10 @@ export async function storageCosSts(options?: RequestOptions) {
 export async function storageCosPresignedUrl(body: {
   key: string;
   contentType: string;
+  fileName: string;
+  fileSize: number;
+  mimeType: string;
+  path:string,
   expires?: number;
 }, options?: RequestOptions) {
   return request<any>('/api/netdisk/cos/presigned-url', {
